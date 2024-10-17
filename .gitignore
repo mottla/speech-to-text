@@ -1,0 +1,14 @@
+/pretrained_models/
+/Transcriptions/
+
+# Ignore PyCharm project files
+.idea/
+*.iml
+
+# Ignore Python bytecode
+__pycache__/
+*.py[cod]
+
+# Ignore virtual environments
+venv/
+env/
