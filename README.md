@@ -26,20 +26,48 @@ Transcription can occur in two ways:
 
 ## Installation
 
-1. Clone the repository:
+### Clone the repository:
 
    ```bash
-   git clone https://github.com/yourusername/your-repo-name.git
-   cd your-repo-name
+   git clone https://github.com/mottla/speech-to-text
    ```
+### Install CUDA:
 
-2. Install the required dependencies. The following libraries are not installed by default and need to be installed via pip:
+1. **Check System Requirements**: Ensure that your system has a compatible GPU and meets the necessary requirements for the CUDA version you want to install.
+
+2. **Download CUDA Toolkit**:
+   - Visit the [NVIDIA CUDA Toolkit Download page](https://developer.nvidia.com/cuda-downloads).
+   - Select your operating system (Windows, Linux, or macOS) and follow the instructions to download the installer.
+
+3. **Install CUDA Toolkit**:
+   - For Windows: Run the downloaded `.exe` file and follow the installation wizard. Make sure to select the appropriate options for your system.
+   - For Linux: You can install using a package manager or run the `.run` file. Follow the instructions provided on the download page for your specific distribution.
+   - For macOS: Follow the instructions provided on the download page.
+
+4. **Set Environment Variables** (if necessary):
+   - On Windows, you may need to add the CUDA installation path to your system's PATH environment variable.
+   - On Linux, you can add the following lines to your `.bashrc` or `.bash_profile`:
+     ```bash
+     export PATH=/usr/local/cuda/bin:$PATH
+     export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+     ```
+
+5. **Verify Installation**: After installation, you can verify that CUDA is installed correctly by running the `nvcc --version` command in your terminal or command prompt.
+
+### Additional Resources:
+- [CUDA Installation Guide for Windows](https://docs.nvidia.com/cuda/cuda-installation-guide-windows/index.html)
+- [CUDA Installation Guide for Linux](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/index.html)
+- [CUDA Installation Guide for macOS](https://docs.nvidia.com/cuda/cuda-installation-guide-mac-os-x/index.html)
+
+These links provide detailed instructions and troubleshooting tips for installing CUDA on different operating systems.
+
+### Install the required dependencies 
+
+The following libraries are not installed by default and need to be installed via pip:
 
    ```bash
    pip install torch sounddevice torchaudio pyannote.audio transformers speechbrain numpy
    ```
-
-3. Ensure that you have the necessary hardware and software requirements met, including CUDA and the appropriate drivers for your GPU.
 
 
 ### Note on Pyannote
@@ -48,14 +76,15 @@ For the `pyannote.audio` library, you may need to install additional dependencie
 
 ## Usage
 
-To run the speech-to-text system, execute the following command:
+On first usage, the Huggingface transformers library will download the required AI models (roughly 3 GB) and then store them in cache for later usage.
+Some models require access rights, so consider making an account on huggingface. 
+To run the speech-to-text system, execute the following command and then follow the instructions:
 
 ```bash
 python main.py
 ```
 
-
-Replace `<path_to_audio_file>` with the path to the audio file you want to transcribe. For streaming transcription, ensure your audio input is set up correctly.
+The program will create a folder inside the project called Transcripts, where it stores all transcribed audio.
 
 ## Contributing
 
