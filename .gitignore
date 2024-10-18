@@ -1,5 +1,6 @@
 /pretrained_models/
 /Transcriptions/
+learned_speakers.pth
 
 # Ignore PyCharm project files
 .idea/

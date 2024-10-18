@@ -3,7 +3,7 @@ import os
 import torch
 from pynput import keyboard
 import SpeechToText_OnKlickClass
-import pyperclip
+import sounddevice as sd
 
 def on_press(key):
     global key_pressed
@@ -16,17 +16,12 @@ def on_press(key):
             if key == keyboard.Key.esc:
                 print("shutting down")
                 SpeechToText.close()
-                #FakeSpeech.close()
                 return False
-            elif key == keyboard.Key.f2:
-                selected_text = pyperclip.paste()
-                print("Text to Speech: ", selected_text)
-                #FakeSpeech.generate_audio_and_play(text=selected_text, language="en")
             elif key == keyboard.Key.f4:
                 if not key_pressed:
                     key_pressed = True
                     print("Start transcribing...")
-                    SpeechToText.start_recording()
+                    SpeechToText.start_recording_multiple(6)
                 else:
                     print("Stop transcribing ...")
                     key_pressed = False
@@ -43,24 +38,47 @@ if __name__ == '__main__':
     device2 = torch.device("cuda:1") if torch.cuda.is_available() else torch.device("cpu")
 
     print("Start")
-    SpeechToText = SpeechToText_OnKlickClass.SpeechToText(device1, 6, False)
-    # FakeSpeech = FakeSpeechClass.TextToSpeech(device2)
-    # SpeechToText.setEmbeddingComputer(FakeSpeech.compute_embedding)
-    # SpeechToText.setGPTEmbeddingComputer(FakeSpeech.compute_GPTembedding)
+    SpeechToText = SpeechToText_OnKlickClass.SpeechToText(device1,  False)
 
     print("Done Loading AIs: Start")
 
     # Prompt the user for input
     user_input = input(
-        "if you want to transcribe a file, type a valid filepath here, otherwise type anything to continue interactive mode: ")
+        "if you want to transcribe a file, type a valid filepath 'mysound.wav' here, otherwise push the ANY button. ")
     # Check if the user provided a file path or pressed 's'
     if os.path.exists(user_input):
         file_path = user_input
         print(f"Transcribing the file at {file_path}...")
-        SpeechToText.transcribeFile(file_path)
+        SpeechToText.transcribeFile(file_path,12)
         # Here you would add the transcription logic
         print("Transcription complete!")
-    else:
-        print("Continuing with the next steps...")
-        with keyboard.Listener(on_press=on_press) as listener:
-            listener.join()
+
+    print("Interactive mode:")
+    user_input = input(
+        "to display and select one or more input devices press 'i'. To continue with default recording device push the ANY button.  ")
+    if user_input.lower() == "i":
+        devices = sd.query_devices()
+        for i, device in enumerate(devices):
+            print(
+                f"Device {i}: {device['name']} - Input Channels: {device['max_input_channels']}, Output Channels: {device['max_output_channels']}")
+
+        while True:
+            devices_input = input(
+                "type the device numbers that should jointly record and transcribe (example: '0 3' without ' ) ")
+            try:
+                # Split the input string by spaces and convert to a list of integers
+                devicesN = [int(num) for num in devices_input.split()]
+                SpeechToText.set_input_devices(devicesN)
+                print("Selected:", devicesN)
+                break
+            except ValueError:
+                print("Invalid input. Please enter numbers separated by spaces.")
+
+    print("Key listener is active. Start/Pause transcription by pressing f4. Close program with ESC")
+
+
+    # Get the default input device
+
+
+    with keyboard.Listener(on_press=on_press) as listener:
+        listener.join()

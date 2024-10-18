@@ -119,11 +119,11 @@ if __name__ == "__main__":
     for i, (value, tensor,gpt,name) in enumerate(reversed(sorted_list)):
         print(f"Tensor {name} at rank {i}: {tensor.numpy()}, {gpt.numpy()}, Value: {value}")
     # Save the sorted list to a file
-    sorted_list.save('sorted_list.pth')
+    sorted_list.save()
 
     # Create a new SortedList and load the saved data
-    new_sorted_list = SortedList()
-    new_sorted_list.load('sorted_list.pth')
+    new_sorted_list = SortedList("test.pth")
+    new_sorted_list.load()
 
     print("\nLoaded elements from file:")
     for i, (value, tensor, gpt, name) in enumerate(sorted_list):

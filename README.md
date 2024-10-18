@@ -1,4 +1,4 @@
-# Speech to Text with Whisper v3
+# Speech to Text
 
 ## Overview
 
@@ -14,11 +14,14 @@ Transcription can occur in two ways:
 - **Adaptive Learning**: The system learns to identify speaker voices and annotates the transcript respectively, improving transcription accuracy and context.
 - **Model Flexibility**: The Whisper v3 model can be replaced with any other text-to-speech (TTS) model that adheres to the Hugging Face interface.
 - **Translation Support**: Whisper v3 supports real-time translation, allowing for multilingual transcription.
+- **Transcribe Zoom, Teams or whatever meetings**: Supports multiple inputs, so it can record all your audio output together with you microphone input using an appropriate setup (see below)
+
 
 ## Requirements
 
-- **VRAM**: Approximately 7 GB of VRAM is required for optimal performance.
+- **VRAM**: Approximately 7 GB of VRAM when using - [OpenAI Whisper](https://huggingface.co/openai/whisper-large-v3is) as the speech-to-text model. This model can transcribe a wide range of languages and also perform translation. Model can easily be changed. 
 - **CUDA**: Ensure that CUDA is installed and configured for GPU acceleration.
+- **(optional) Virtual Audio Cable**: Setup [vb-audio](https://vb-audio.com/Cable/) in order to record your voice together with your speakers output, if you want to get a transcript/translation of your Zoom meeting.
 
 
 ## Installation
@@ -48,8 +51,9 @@ For the `pyannote.audio` library, you may need to install additional dependencie
 To run the speech-to-text system, execute the following command:
 
 ```bash
-python main.py --input <path_to_audio_file>
+python main.py
 ```
+
 
 Replace `<path_to_audio_file>` with the path to the audio file you want to transcribe. For streaming transcription, ensure your audio input is set up correctly.
 

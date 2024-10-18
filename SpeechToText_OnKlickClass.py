@@ -17,9 +17,9 @@ from speechbrain.inference.speaker import EncoderClassifier
 
 
 class SpeechToText:
-    def __init__(self,device,intervalTime = 10,Debug = False):
+    def __init__(self,device,Debug = False):
         self.device = device
-        self.intervalTime=intervalTime
+        self.intervalTime=10
         # Load the Whisper model and processor
         #self.model_name = "openai/whisper-large-v3"
         self.model_name = "openai/whisper-large-v3"
@@ -27,18 +27,18 @@ class SpeechToText:
         # Start audio stream
         self.sample_rate = 16000  # Whisper works best with 16kHz
         self.channels = 1  # Mono audio
-        self.input_stream = None
-        self.stream = None
         self.audio_threadOut = None
         self.Input_audio_queue = []
-        self.Output_audio_queue =   np.array([]) #torch.tensor([]).to(device)
         self.torch_dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
         self.stop_event = threading.Event()
+        self.writeLock = threading.Event()
+        self.force_processing = threading.Event()
         self.embeddingComputer = None
         self.GPTembeddingComputer = None
         self.Debug = Debug
         self.leanedEmbeddings = SortedList().load()
-
+        self.output_arrays = None
+        self.streams = None  # List to hold the streams
         # Define the file path
         # Get the current date and time
         current_datetime = datetime.now()
@@ -49,7 +49,7 @@ class SpeechToText:
         directory_path = os.path.dirname(self.file_path)
         # Create the directory (and any necessary parent directories)
         os.makedirs(directory_path, exist_ok=True)
-
+        self.input_device_ids = [0]
         # Create the file (this will create an empty file if it does not exist)
         with open(self.file_path, 'a', encoding='utf-8'):
             pass  # No initial writing, just create the file
@@ -76,8 +76,6 @@ class SpeechToText:
         self.classifier = EncoderClassifier.from_hparams(source="speechbrain/spkrec-ecapa-voxceleb")
         print("done init")
 
-
-
     def setEmbeddingComputer(self, computeEmbedding):
         self.embeddingComputer = computeEmbedding
         return
@@ -85,8 +83,9 @@ class SpeechToText:
         self.GPTembeddingComputer = computeEmbedding
         return
 
-    def transcribeFile(self,file_path):
+    def transcribeFile(self,file_path,intervalTime = 10):
         self.stop_event.clear()
+        self.intervalTime = intervalTime
         waveform, sample_rate = torchaudio.load(file_path)
 
         # Convert to mono if it's stereo (2 channels)
@@ -111,26 +110,90 @@ class SpeechToText:
         self.audio_threadOut = threading.Thread(target=self.processAudioOut)
         self.audio_threadOut.start()
 
-
+        self.force_processing.set()
         for i in range(0,len(waveform),BLOCKSIZE):
-            self.Output_audio_queue = waveform[i:i+BLOCKSIZE].numpy()
-            while len(self.Output_audio_queue) is not 0:
+            self.output_arrays = [waveform[i:i+BLOCKSIZE].numpy()]
+            while len(self.output_arrays[0]) != 0:
                 time.sleep(0.1)
+        self.force_processing.clear()
+        self.close()
 
+    def set_input_devices(self,input_devices=None):
+        if input_devices is None:
+            input_devices = [0,2]
+        self.input_device_ids = input_devices
 
+    def start_recording_multiple(self, interval_time):
 
-    def start_recording(self):
         self.stop_event.clear()
+        self.intervalTime = interval_time
+        self.output_arrays = [np.array([]) for _ in self.input_device_ids]  # Create an array for each device
+        self.streams = []  # List to hold the streams
+
+        # Create input streams for each device
+        for i,device in enumerate(self.input_device_ids):
+            stream = sd.InputStream(samplerate=self.sample_rate, channels=1,
+                                    device=device, callback=self.create_callback(i), blocksize=2048)
+            self.streams.append(stream)
+
+        for stream in self.streams:
+            stream.start()
+
+        self.audio_threadOut = threading.Thread(target=self.processAudioOut)
+        self.audio_threadOut.start()
+
+    def create_callback(self, device_index):
+        def audio_callback(outdata, frames, time, status):
+            if status:
+                print(status)  # Print any status messages
+            outdata_np = outdata.copy().flatten()  # Ensure we have a copy
+            self.writeLock.wait()
+            self.output_arrays[device_index] = np.concatenate((self.output_arrays[device_index], outdata_np))
+        return audio_callback
+
+    def compute_mixed_output(self):
+        # Stack the arrays and sum the outputs from all devices
+        if not self.output_arrays:
+            return np.array([])
+
+        self.writeLock.clear()
+        # Find the maximum length among the output arrays
+        max_length = max(len(arr) for arr in self.output_arrays)
+
+        # Pad each array with zeros to match the maximum length
+        padded_arrays = [np.pad(arr, (0, max_length - len(arr)), 'constant') for arr in self.output_arrays]
+        self.writeLock.set()
+
+        # Stack the padded arrays
+        stacked_outputs = np.stack(padded_arrays, axis=0)
+
+        # Sum the outputs
+        mixed_output = np.sum(stacked_outputs, axis=0)
+
+        # Check if mixed_output is empty before normalizing
+        if mixed_output.size == 0:
+            return mixed_output  # Return empty array if no data
+
+        # Normalize to prevent clipping
+        if np.max(np.abs(mixed_output)) > 1.0:
+            mixed_output = mixed_output / np.max(np.abs(mixed_output))
+
+        return mixed_output
+
+    def start_recording(self,interval_time = 10):
+        self.stop_event.clear()
+        self.intervalTime = interval_time
+        self.output_arrays = [np.array([])]
         # List all available audio devices
         #devices = sd.query_devices()
         #for i, device in enumerate(devices):
         #   print( f"Device {i}: {device['name']} - Input Channels: {device['max_input_channels']}, Output Channels: {device['max_output_channels']}")
 
         # Get the default input device
-        #default_input_device = find_device_index("CABLE Output (VB-Audio Virtual")
+        default_input_device = find_device_index("CABLE Output (VB-Audio Virtual")
 
         # Get the default input device
-        default_input_device = sd.default.device[0]  # The first element is the input device
+        #default_input_device = sd.default.device[0]  # The first element is the input device
         device_info = sd.query_devices(default_input_device)
         print(f"Listening to input device: {device_info['name']}")
 
@@ -158,14 +221,16 @@ class SpeechToText:
             try:
                 buffer = torch.tensor([]).to(self.device)
                 while not self.stop_event.is_set():  # Check if the stop event is set
-                    if len(buffer) + len(self.Output_audio_queue) >= self.intervalTime * self.sample_rate:
+                    mean = self.compute_mixed_output()
+                    if len(buffer) + len(mean) >= self.intervalTime * self.sample_rate or self.force_processing or self.force_processing.is_set():
                         # Get audio data from the queue
                         audio_data = torch.cat(
-                            (buffer, torch.from_numpy(self.Output_audio_queue).float().to(self.device)), dim=0)
-                        self.Output_audio_queue = np.array([])  # torch.tensor([],device=self.device) #clear the queue
+                            (buffer, torch.from_numpy(mean).float().to(self.device)), dim=0)
+
+                        self.output_arrays = [np.array([]) for _ in range(0,len(self.output_arrays))]
 
                         # audio_data = torch.from_numpy(audio_data).float().to(self.device)
-                        audio_data = self.classifier.audio_normalizer(audio_data, self.sample_rate)
+                        #audio_data = self.classifier.audio_normalizer(audio_data, self.sample_rate)
 
                         input_data = {
                             "waveform": audio_data.unsqueeze(0),  # The audio tensor
@@ -274,26 +339,23 @@ class SpeechToText:
                         file.flush()
                     else:
                         time.sleep(
-                            self.intervalTime - ((len(buffer) + len(self.Output_audio_queue)) / self.sample_rate))
+                            self.intervalTime - ((len(buffer) + len(mean)) / self.sample_rate))
 
             except KeyboardInterrupt:
                 print("Stopped by user. (STRG+C)")
             finally:
                 self.cleanup()
 
-    def stop_recording(self):
-        self.stop_event.set()  # Signal the thread to stop
-        self.stream.stop()
-        self.cleanup()
 
     def cleanup(self):
         if self.stream is not None:
             self.stream.close()
-        self.Output_audio_queue = np.array([])
         print("Cleanup completed.")
 
     def close(self):
-        self.stop_recording()
+        self.stop_event.set()  # Signal the thread to stop
+        self.stream.stop()
+        self.cleanup()
 
 
     def embeddingCollector(self, audio_input1D, speech_intervalls):
