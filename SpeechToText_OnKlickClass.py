@@ -321,7 +321,7 @@ class SpeechToText:
                             file.seek(0)
                             content = file.read()
                             # Replace all occurrences of X with Y
-                            modified_content = content.replace(deleteName, newName)
+                            modified_content = content.replace( f"[{deleteName}]", f"[{newName}]")
                             # Move the cursor to the beginning of the file
                             file.seek(0)
                             # Write the modified content back to the file
