@@ -120,7 +120,7 @@ class SpeechToText:
 
     def set_input_devices(self,input_devices=None):
         if input_devices is None:
-            input_devices = [0,2]
+            input_devices = [sd.default.device[0]]
         self.input_device_ids = input_devices
 
     def start_recording_multiple(self, interval_time):
@@ -132,6 +132,7 @@ class SpeechToText:
 
         # Create input streams for each device
         for i,device in enumerate(self.input_device_ids):
+            print("input device ",device)
             stream = sd.InputStream(samplerate=self.sample_rate, channels=1,
                                     device=device, callback=self.create_callback(i), blocksize=2048)
             self.streams.append(stream)
@@ -222,7 +223,8 @@ class SpeechToText:
                 buffer = torch.tensor([]).to(self.device)
                 while not self.stop_event.is_set():  # Check if the stop event is set
                     mean = self.compute_mixed_output()
-                    if len(buffer) + len(mean) >= self.intervalTime * self.sample_rate or self.force_processing or self.force_processing.is_set():
+                    print( (len(buffer) + len(mean) )/ self.sample_rate)
+                    if len(buffer) + len(mean) >= self.intervalTime * self.sample_rate or self.force_processing.is_set():
                         # Get audio data from the queue
                         audio_data = torch.cat(
                             (buffer, torch.from_numpy(mean).float().to(self.device)), dim=0)
@@ -248,37 +250,42 @@ class SpeechToText:
                             end = int(segment.end * self.sample_rate)
                             speech_segments.append(audio_data[start:end])
 
-                        last_frame_was_cut = False
-                        if len(vad.get_timeline().support()) != 0:
-                            last_frame_was_cut = vad.get_timeline().support()[-1].end * self.sample_rate >= len(
-                                audio_data) * 0.99
-                            # audio_data = audio_data[vad.get_timeline().support()[0].start : ] #todo remove pre all noise
-
-                        # non_silent_audio_frames, last_frame_was_cut = remove_all_silence(audio_data,self.sample_rate,35,0.2,self.Debug)
-                        # non_silent_audio_frames, last_frame_was_cut = remove_silence_pt(audio_data,self.sample_rate, threshold=0.0001, min_silence_length=0.4,debug=True)
-                        if len(speech_segments) == 0:
-                            print("silence..")
-                            continue
-                        # print(buffer.shape,np.concatenate(non_silent_audio_frames).shape)
-                        complete = torch.tensor([]).to(self.device)
-                        if last_frame_was_cut:
-                            for i, s in enumerate(speech_segments):
-                                complete = torch.cat((complete, s), dim=0)
-                                if len(complete) >= self.sample_rate * self.intervalTime:
-                                    buffer = audio_data[int(self.sample_rate * vad.get_timeline().support()[i].end):]
-                                    break
-                            if len(complete) < self.sample_rate * self.intervalTime:
-                                buffer = torch.cat((buffer, audio_data), dim=0)
-                                print("collecting more..")
-                                continue
-                        else:
-                            complete = torch.cat(speech_segments, dim=0)
-                            buffer = torch.tensor([]).to(self.device)
+                        # last_frame_was_cut = False
+                        # if len(vad.get_timeline().support()) != 0:
+                        #     last_frame_was_cut = vad.get_timeline().support()[-1].end * self.sample_rate >= len(
+                        #         audio_data) * 0.99
+                        #     # audio_data = audio_data[vad.get_timeline().support()[0].start : ] #todo remove pre all noise
+                        #
+                        # # non_silent_audio_frames, last_frame_was_cut = remove_all_silence(audio_data,self.sample_rate,35,0.2,self.Debug)
+                        # # non_silent_audio_frames, last_frame_was_cut = remove_silence_pt(audio_data,self.sample_rate, threshold=0.0001, min_silence_length=0.4,debug=True)
+                        # if len(speech_segments) == 0:
+                        #     print("silence..")
+                        #     continue
+                        # # print(buffer.shape,np.concatenate(non_silent_audio_frames).shape)
+                        # complete = torch.tensor([]).to(self.device)
+                        # if last_frame_was_cut:
+                        #     print("last frame was cut")
+                        #     for i, s in enumerate(speech_segments):
+                        #         complete = torch.cat((complete, s), dim=0)
+                        #         print(i, s)
+                        #         if len(complete) >= self.sample_rate * self.intervalTime:
+                        #             buffer = audio_data[int(self.sample_rate * vad.get_timeline().support()[i].end):]
+                        #             print("rbeak")
+                        #             break
+                        #     if len(complete) < self.sample_rate * self.intervalTime:
+                        #         buffer = torch.cat((buffer, audio_data), dim=0)
+                        #         print("collecting more..")
+                        #         continue
+                        # else:
+                        complete = torch.cat(speech_segments, dim=0)
+                        buffer = torch.tensor([]).to(self.device)
 
                         if self.Debug:
-                            torchaudio.save(f'segment{ctr}.wav', complete, self.sample_rate)
+                            torchaudio.save(f'Debug\segment{ctr}.wav', complete.cpu().unsqueeze(0), self.sample_rate)
+                            print("saved to ", ctr)
                             ctr += 1
                             ctr = ctr % 8
+
 
                         encodedAudio = self.processor(
                             complete.cpu().numpy().squeeze(),
@@ -308,6 +315,7 @@ class SpeechToText:
                         transcription = self.processor.batch_decode(generated_ids, skip_special_tokens=True,
                                                                     decode_with_timestamps=True)[0]
 
+                        print(transcription)
                         pattern = r"<\|(\d+\.\d+)\|>\s*(.*?)<\|(\d+\.\d+)\|>"
                         # Find all matches
                         matches = re.findall(pattern, transcription)
@@ -338,9 +346,9 @@ class SpeechToText:
                             file.write(s)
                         file.flush()
                     else:
+                        print("sleep for ",self.intervalTime - ((len(buffer) + len(mean)) / self.sample_rate))
                         time.sleep(
                             self.intervalTime - ((len(buffer) + len(mean)) / self.sample_rate))
-
             except KeyboardInterrupt:
                 print("Stopped by user. (STRG+C)")
             finally:
@@ -348,13 +356,14 @@ class SpeechToText:
 
 
     def cleanup(self):
-        if self.stream is not None:
-            self.stream.close()
+        for stream in self.streams:
+            stream.close()
         print("Cleanup completed.")
 
     def close(self):
         self.stop_event.set()  # Signal the thread to stop
-        self.stream.stop()
+        for stream in self.streams:
+            stream.close()
         self.cleanup()
 
 

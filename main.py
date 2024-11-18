@@ -21,7 +21,7 @@ def on_press(key):
                 if not key_pressed:
                     key_pressed = True
                     print("Start transcribing...")
-                    SpeechToText.start_recording_multiple(6)
+                    SpeechToText.start_recording_multiple(12)
                 else:
                     print("Stop transcribing ...")
                     key_pressed = False
@@ -38,7 +38,7 @@ if __name__ == '__main__':
     device2 = torch.device("cuda:1") if torch.cuda.is_available() else torch.device("cpu")
 
     print("Start")
-    SpeechToText = SpeechToText_OnKlickClass.SpeechToText(device1,  False)
+    SpeechToText = SpeechToText_OnKlickClass.SpeechToText(device1,  True)
 
     print("Done Loading AIs: Start")
 
@@ -73,6 +73,8 @@ if __name__ == '__main__':
                 break
             except ValueError:
                 print("Invalid input. Please enter numbers separated by spaces.")
+    else:
+        SpeechToText.set_input_devices()
 
     print("Key listener is active. Start/Pause transcription by pressing f4. Close program with ESC")
 
