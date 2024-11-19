@@ -21,7 +21,7 @@ def on_press(key):
                 if not key_pressed:
                     key_pressed = True
                     print("Start transcribing...")
-                    SpeechToText.start_recording_multiple(12)
+                    SpeechToText.start_recording_multiple(10)
                 else:
                     print("Stop transcribing ...")
                     key_pressed = False
@@ -49,7 +49,7 @@ if __name__ == '__main__':
     if os.path.exists(user_input):
         file_path = user_input
         print(f"Transcribing the file at {file_path}...")
-        SpeechToText.transcribeFile(file_path,12)
+        SpeechToText.transcribeFile(file_path,10)
         # Here you would add the transcription logic
         print("Transcription complete!")
 
