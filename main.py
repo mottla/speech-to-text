@@ -38,20 +38,23 @@ if __name__ == '__main__':
     device2 = torch.device("cuda:1") if torch.cuda.is_available() else torch.device("cpu")
 
     print("Start")
-    SpeechToText = SpeechToText_OnKlickClass.SpeechToText(device1,  True)
+    SpeechToText = SpeechToText_OnKlickClass.SpeechToText(device2,  True)
 
     print("Done Loading AIs: Start")
 
+    while True:
     # Prompt the user for input
-    user_input = input(
-        "if you want to transcribe a file, type a valid filepath 'mysound.wav' here, otherwise push the ANY button. ")
-    # Check if the user provided a file path or pressed 's'
-    if os.path.exists(user_input):
-        file_path = user_input
-        print(f"Transcribing the file at {file_path}...")
-        SpeechToText.transcribeFile(file_path,10)
-        # Here you would add the transcription logic
-        print("Transcription complete!")
+        user_input = input(
+            "if you want to transcribe a soundfile or all soundfiles within a folder, type a valid file/folerpath, otherwise push the ANY button. ")
+        # Check if the user provided a file path or pressed 's'
+        if os.path.exists(user_input):
+            file_path = user_input
+            print(f"Transcribing the file at {file_path}...")
+            SpeechToText.transcribeFile(file_path,15)
+            # Here you would add the transcription logic
+            print("Transcription complete!")
+        else:
+            break
 
     print("Interactive mode:")
     user_input = input(

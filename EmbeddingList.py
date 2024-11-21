@@ -1,5 +1,6 @@
 import bisect
 import os
+from audioop import error
 
 import torch
 import webcolors
@@ -45,6 +46,7 @@ class SortedList:
         for i,(_, _, _,name1) in enumerate(self.elements):
             if name1 == name:
                 del self.elements[i]
+                COLORS.append(name1)
 
     def delete(self,index):
         del self.elements[index]
@@ -72,16 +74,16 @@ class SortedList:
 
 
     def load(self):
-        global COLORS
         if os.path.exists(self.file_path):
             # Load the sorted list from a file
             self.elements = torch.load(self.file_path)
-            COLORS = list(webcolors.names())
             for (_,_,_,name) in self.elements:
-                COLORS.remove(name)
+                if name not in COLORS:
+                    print(name)
+                else:
+                    COLORS.remove(name)
         else:
             print(f"could not find learned speaker voices. Creating new file {self.file_path}")
-
         return self
 
     def __iter__(self):

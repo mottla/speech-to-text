@@ -1,6 +1,8 @@
 import threading
 
 import re
+
+import librosa
 import torch
 import sounddevice as sd
 import torch.nn.functional as F
@@ -8,6 +10,7 @@ import time, os
 from pyannote.audio.pipelines import VoiceActivityDetection
 import torchaudio
 from select import error
+from tensorflow.python.ops.numpy_ops.np_dtypes import float32
 from transformers import AutoProcessor, AutoModelForSpeechSeq2Seq
 from datetime import datetime
 import numpy as np
@@ -36,7 +39,7 @@ class SpeechToText:
         self.embeddingComputer = None
         self.GPTembeddingComputer = None
         self.Debug = Debug
-        self.leanedEmbeddings = SortedList().load()
+        self.leanedEmbeddings = SortedList()#.load()
         self.output_arrays = None
         self.streams = None  # List to hold the streams
         # Define the file path
@@ -55,8 +58,8 @@ class SpeechToText:
             pass  # No initial writing, just create the file
         self.device = torch.device(device)
         # Load the Whisper model and processor
-        self.processor = AutoProcessor.from_pretrained(self.model_name,device = self.device)
-        self.STT_model = AutoModelForSpeechSeq2Seq.from_pretrained(self.model_name)
+        self.processor = AutoProcessor.from_pretrained(self.model_name,device = self.device , torch_dtype=self.torch_dtype, low_cpu_mem_usage=True)
+        self.STT_model = AutoModelForSpeechSeq2Seq.from_pretrained(self.model_name, torch_dtype=self.torch_dtype, low_cpu_mem_usage=True)
         # Set the model to evaluation mode
         self.STT_model.eval()
         self.STT_model.to(self.device)
@@ -83,15 +86,14 @@ class SpeechToText:
         self.GPTembeddingComputer = computeEmbedding
         return
 
-    def transcribeFile(self,file_path,intervalTime = 10):
-        self.stop_event.clear()
-        self.intervalTime = intervalTime
-        waveform, sample_rate = torchaudio.load(file_path)
-
+    def transcribe(self,waveform,sample_rate,path):
         # Convert to mono if it's stereo (2 channels)
         if waveform.shape[0] > 1:
             waveform = waveform.mean(dim=0, keepdim=True)  # Average the two channels
 
+
+        with open(path, 'a', encoding='utf-8'):
+            pass  # No initial writing, just create the file
         # Resample if the original sample rate is not equal to the target sample rate
         if sample_rate != self.sample_rate:
             resampler = torchaudio.transforms.Resample(orig_freq=sample_rate, new_freq=self.sample_rate)
@@ -107,16 +109,73 @@ class SpeechToText:
             padding = required_length - current_length
             waveform = torch.nn.functional.pad(waveform, (0, padding), mode='constant', value=0)
 
-        self.audio_threadOut = threading.Thread(target=self.processAudioOut)
+        self.stop_event.clear()
+        self.audio_threadOut = threading.Thread(target=self.processAudioOut,args=(path,))
         self.audio_threadOut.start()
 
         self.force_processing.set()
-        for i in range(0,len(waveform),BLOCKSIZE):
-            self.output_arrays = [waveform[i:i+BLOCKSIZE].numpy()]
+        for i in range(0, len(waveform), BLOCKSIZE):
+            self.output_arrays = [waveform[i:i + BLOCKSIZE].numpy()]
             while len(self.output_arrays[0]) != 0:
                 time.sleep(0.1)
+        self.stop_event.set()
         self.force_processing.clear()
-        self.close()
+        self.audio_threadOut.join()
+
+
+
+    def transcribeFile(self,file_path,intervalTime = 10,Debug=False,skippIfExists = True):
+        self.Debug = Debug
+        self.stop_event.clear()
+        self.intervalTime = intervalTime
+
+        def is_sound_file(file_path):
+            # Define common sound file extensions and their corresponding handlers
+            sound_handlers = {
+                '.mp3': handle_mp3,
+                '.wav': handle_wav,
+            }
+            # Check the file extension and call the appropriate handler if it exists
+            file_extension = os.path.splitext(file_path)[1].lower()
+            if file_extension in sound_handlers:
+                sound_handlers[file_extension](file_path)
+                return True
+            else:
+                print(f"{file_path} is not a recognized sound file.")
+                return False
+
+        def handle_mp3(file_path):
+            print(f"Handling MP3 file: {file_path}")
+            path = file_path + ".txt"
+            if os.path.isfile(path) and skippIfExists:
+                return
+            waveform, sample_rate = librosa.load(file_path, sr=self.sample_rate)
+            waveform = torch.from_numpy(waveform).unsqueeze(0)
+            self.transcribe(waveform, sample_rate,path)
+
+        def handle_wav(file_path):
+            print(f"Handling WAV file: {file_path}")
+            path = file_path + ".txt"
+            if os.path.isfile(path) and skippIfExists:
+                return
+            waveform, sample_rate = torchaudio.load(file_path)
+            self.transcribe(waveform, sample_rate,path)
+
+
+        def list_files_in_folder(folder_path):
+            # Check if the provided path is a directory
+            if os.path.isdir(folder_path):
+                print(f"Listing files in folder: {folder_path}")
+                for item in os.listdir(folder_path):
+                    item_path = os.path.join(folder_path, item)
+                    list_files_in_folder(item_path)
+            elif is_sound_file(folder_path):
+                print(f"{folder_path} is a sound file.")
+            else:
+                print(f"{folder_path} is neither a folder nor a recognized sound file.")
+
+        list_files_in_folder(file_path)
+
 
     def set_input_devices(self,input_devices=None):
         if input_devices is None:
@@ -140,7 +199,7 @@ class SpeechToText:
         for stream in self.streams:
             stream.start()
 
-        self.audio_threadOut = threading.Thread(target=self.processAudioOut)
+        self.audio_threadOut = threading.Thread(target=self.processAudioOut,args=(self.file_path))
         self.audio_threadOut.start()
 
     def create_callback(self, device_index):
@@ -212,12 +271,12 @@ class SpeechToText:
                                      device=default_input_device, callback=audio_callback ,blocksize=1024)
 
         self.stream.start()
-        self.audio_threadOut = threading.Thread(target=self.processAudioOut)
+        self.audio_threadOut = threading.Thread(target=self.processAudioOut,args=(self.file_path))
         self.audio_threadOut.start()
 
-    def processAudioOut(self):
+    def processAudioOut(self,file_path):
         ctr = 0
-        with (open(self.file_path, 'r+', encoding='utf-8') as file):
+        with (open(file_path, 'r+', encoding='utf-8') as file):
             file.seek(0, 2)
             file.write(f"\n\n [Starting transcribing at {datetime.now()}]\n")
             try:
@@ -225,14 +284,15 @@ class SpeechToText:
                 while not self.stop_event.is_set():  # Check if the stop event is set
                     mean = self.compute_mixed_output()
 
-                    if self.intervalTime - ((len(buffer) + len(mean)) / self.sample_rate) > 0:
+                    if self.intervalTime - ((len(buffer) + len(mean)) / self.sample_rate) > 0 and not self.force_processing.is_set():
                         #print("sleep for ",self.intervalTime - ((len(buffer) + len(mean)) / self.sample_rate),len(buffer) , len(mean))
                         time.sleep(self.intervalTime - ((len(buffer) + len(mean)) / self.sample_rate))
 
-
                     if len(buffer) + len(mean) >= self.intervalTime * self.sample_rate or self.force_processing.is_set():
                         # Get audio data from the queue
-                        audio_data = torch.cat((buffer, torch.from_numpy(mean).float().to(self.device)), dim=0)
+                        audio_data = torch.cat((buffer, torch.from_numpy(mean).to(self.device)), dim=0).to(torch.float32)
+                        if len(audio_data)==0:
+                            continue
                         #print(audio_data.shape)
                         self.output_arrays = [np.array([]) for _ in range(0,len(self.output_arrays))]
 
@@ -243,7 +303,6 @@ class SpeechToText:
                             "waveform": audio_data.unsqueeze(0),  # The audio tensor
                             "sample_rate": self.sample_rate  # The sample rate
                         }
-
                         vad = self.VAD_pipeline(input_data)
 
                         last_frame_was_cut = False
@@ -268,20 +327,18 @@ class SpeechToText:
                                 complete = audio_data
                                 if len(complete) < self.sample_rate * self.intervalTime * 2.:
                                     buffer = complete
-                                    #print("collecting more..")
+                                    print("collecting more..")
                                     continue
                                 buffer = torch.tensor([]).to(self.device)
                         else:
                             complete = audio_data
                             buffer = torch.tensor([]).to(self.device)
 
-
                         if self.Debug:
                             torchaudio.save(f'Debug\segment{ctr}.wav', complete.cpu().unsqueeze(0), self.sample_rate)
                             #print("saved to ", ctr)
                             ctr += 1
                             ctr = ctr % 8
-
 
                         encodedAudio = self.processor(
                             complete.cpu().numpy().squeeze(),
@@ -290,7 +347,7 @@ class SpeechToText:
                             # padding="max_length",  # Change to "max_length" to pad to a specific length
                             # max_length=3000,  # Specify the maximum length for padding
                             truncation=False,
-                            return_tensors="pt").to(self.device)
+                            return_tensors="pt").to(self.device).to(self.torch_dtype)
 
                         gen_kwargs = {
                             # "max_new_tokens": 448,
@@ -335,17 +392,20 @@ class SpeechToText:
                             # Move the cursor to the end of the file
                             file.seek(0, 2)  # 0 is the offset, 2 means to seek from the end of the file
 
-                        for s, e, segment, speaker in speakers:
-                            s = f"{speaker}: \t\t {segment}"
-                            print(s)
+                        lastSpeaker = ""
+                        for s, e, segment, speaker , percentage in speakers:
+                            if speaker is not lastSpeaker:
+                                file.write(f"[{speaker}]:")
+                                file.write(f"\n")
+                                lastSpeaker = speaker
+                            print(speaker,percentage,segment)
+                            file.write(segment)
                             file.write(f"\n")
-                            file.write(s)
                         file.flush()
-
             except KeyboardInterrupt:
                 print("Stopped by user. (STRG+C)")
             finally:
-                self.cleanup()
+                print("done")
 
 
     def cleanup(self):
@@ -362,15 +422,7 @@ class SpeechToText:
 
     def embeddingCollector(self, audio_input1D, speech_intervalls):
 
-        similarity_threshold = 0.7
-        thresholBoosted= similarity_threshold
-        if len(speech_intervalls)>0:
-            thresholBoosted = similarity_threshold + (0.05 * similarity_threshold * int(np.log2(len(speech_intervalls))))
-        #audio = inputData["waveform"].squeeze(0)
-        #overlapps = self.OSD_pipeline(inputData).get_timeline().support()
-        #overlapp_free_intervalls = get_single_speaker_annotations(speech_intervalls,overlapps)
-
-        # Extract speech segments based on the VAD annotations
+        similarity_threshold = 0.6
 
         def recurseTill(speech_intervalls,threshhold):
             if len(speech_intervalls) == 0:
@@ -393,30 +445,35 @@ class SpeechToText:
                     matches.add(1.-max(bestC, 0) , None, None, f"New Speaker {newName}")
                     #bestC = (bestC+1.)/2.  #scale cosin to [0,1] .. not mathematically correct to interpret it as probability anyway but good enough
                 for i, (cosSim, _, _, name) in enumerate(matches):
-                    speech_intervalls[0].append(f"[{name}]({round( cosSim *100.,2)}%)")
+                    speech_intervalls[0].append(name)
+                    speech_intervalls[0].append(round(cosSim * 100., 2))
                     return  speech_intervalls, replaced
             if len(speech_intervalls) > 1:
                 start, _,_ = speech_intervalls[0]
                 _, end , _ = speech_intervalls[-1]
                 foundWithHighConfidence, matches, replaced ,_ = self.fkt( audio_input1D[int(start * self.sample_rate):int(end * self.sample_rate)] ,threshhold )
                 if foundWithHighConfidence:
-                    #print("found early", len(speech_intervalls))
+                    print("########found early", len(speech_intervalls))
                     for name, _ in replaced:
                         self.leanedEmbeddings.delete_by_name(name)
                         matches.delete_by_name(name)
                     best = 0
+                    bestP = 0
                     for i, (cosine_simGPU2, _, _ , name) in enumerate(matches):
-                        best = f"[{name}]({round(cosine_simGPU2*100.,2)}%)"
+                        best = name
+                        bestP = round(cosine_simGPU2 * 100., 2)
                         break
                     for i in range(0,len(speech_intervalls)):
                         speech_intervalls[i].append(best)
+                        speech_intervalls[i].append(bestP)
                     return  speech_intervalls, replaced
                 length = len(speech_intervalls)
                 first_half = speech_intervalls[:length // 2]
                 second_half = speech_intervalls[length // 2:]
                 #print("deeper", len(speech_intervalls))
-                speech_intervallsL, replacedL = recurseTill(first_half,threshhold*0.8)
-                speech_intervallsR, replacedR = recurseTill(second_half, threshhold*0.8)
+                flatt = 1.
+                speech_intervallsL, replacedL = recurseTill(first_half,threshhold*flatt)
+                speech_intervallsR, replacedR = recurseTill(second_half, threshhold*flatt)
                 return  speech_intervallsL+speech_intervallsR, replacedL+replacedR
 
         speech_intervallsN, replacedN = recurseTill(speech_intervalls,  similarity_threshold)
@@ -436,6 +493,8 @@ class SpeechToText:
             # cosine_simGPU = F.cosine_similarity(e1, se1, dim=1).item()
             cosine_simGPU2 = F.cosine_similarity(e2, se2, dim=2).item()
             matches.add(cosine_simGPU2, None, None, name)
+            if cosine_simGPU2 > similarity_threshold:
+                foundWithHighConfidence = True
 
         replaced = []
         for i in range(0, matches.len() - 1):
@@ -444,8 +503,8 @@ class SpeechToText:
             (mergNumber1, _, se1, name1) = self.leanedEmbeddings.getByName(name1)
             (mergNumber2, _, se2, name2) = self.leanedEmbeddings.getByName(name2)
             cosine_simGPU2 = F.cosine_similarity(se1, se2, dim=2).item()
-            if cosine_simGPU2 > similarity_threshold:
-                foundWithHighConfidence = True
+            if cosine_simGPU2 > 0.8:
+                print("!merging ",name1,name2)
                 s = mergNumber2 + mergNumber1 + 1.
                 new_mean2 = 3. / s * torch.mean(torch.stack([se1 * mergNumber1, se2 * mergNumber2, e2]), dim=0)
                 if mergNumber1 < mergNumber2:
