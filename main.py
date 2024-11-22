@@ -38,7 +38,7 @@ if __name__ == '__main__':
     device2 = torch.device("cuda:1") if torch.cuda.is_available() else torch.device("cpu")
 
     print("Start")
-    SpeechToText = SpeechToText_OnKlickClass.SpeechToText(device2,  True)
+    SpeechToText = SpeechToText_OnKlickClass.SpeechToText(device1,  True)
 
     print("Done Loading AIs: Start")
 

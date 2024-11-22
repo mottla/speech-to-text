@@ -39,7 +39,7 @@ class SpeechToText:
         self.embeddingComputer = None
         self.GPTembeddingComputer = None
         self.Debug = Debug
-        self.leanedEmbeddings = SortedList()#.load()
+        self.leanedEmbeddings = SortedList().load()
         self.output_arrays = None
         self.streams = None  # List to hold the streams
         # Define the file path
@@ -278,7 +278,7 @@ class SpeechToText:
         ctr = 0
         with (open(file_path, 'r+', encoding='utf-8') as file):
             file.seek(0, 2)
-            file.write(f"\n\n [Starting transcribing at {datetime.now()}]\n")
+            file.write(f"\n\n[Starting transcribing at {datetime.now()}]\n")
             try:
                 buffer = torch.tensor([]).to(self.device)
                 while not self.stop_event.is_set():  # Check if the stop event is set
@@ -422,7 +422,7 @@ class SpeechToText:
 
     def embeddingCollector(self, audio_input1D, speech_intervalls):
 
-        similarity_threshold = 0.6
+        similarity_threshold = 0.85
 
         def recurseTill(speech_intervalls,threshhold):
             if len(speech_intervalls) == 0:
@@ -471,7 +471,7 @@ class SpeechToText:
                 first_half = speech_intervalls[:length // 2]
                 second_half = speech_intervalls[length // 2:]
                 #print("deeper", len(speech_intervalls))
-                flatt = 1.
+                flatt = 0.9
                 speech_intervallsL, replacedL = recurseTill(first_half,threshhold*flatt)
                 speech_intervallsR, replacedR = recurseTill(second_half, threshhold*flatt)
                 return  speech_intervallsL+speech_intervallsR, replacedL+replacedR
