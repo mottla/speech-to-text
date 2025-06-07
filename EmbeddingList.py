@@ -77,7 +77,8 @@ class SortedList:
         if os.path.exists(self.file_path):
             # Load the sorted list from a file
             self.elements = torch.load(self.file_path)
-            for (_,_,_,name) in self.elements:
+            for (a,c,b,name) in self.elements:
+                print(name,a,b,c)
                 if name not in COLORS:
                     print(name)
                 else:
@@ -97,9 +98,9 @@ if __name__ == "__main__":
     sorted_list = SortedList()
 
     # Adding tensors to the sorted list
-    sorted_list.add(torch.tensor([1, 2, 3]),torch.tensor([1]), 5)
-    sorted_list.add(torch.tensor([4, 5, 6]),torch.tensor([2]), 3)
-    sorted_list.add(torch.tensor([7, 8, 9]),torch.tensor([3]), 8)
+    sorted_list.add(4,torch.tensor([1, 2, 3]),torch.tensor([1]) )
+    sorted_list.add(3,torch.tensor([4, 5, 6]),torch.tensor([2]) )
+    sorted_list.add(5,torch.tensor([7, 8, 9]),torch.tensor([3]) )
 
     print("Sorted elements:")
     for i, (value, tensor,gpt,name) in enumerate(sorted_list):
@@ -115,6 +116,7 @@ if __name__ == "__main__":
     print(f"\nAfter updating tensor index {ids}, {sorted_list.get(ids)}")
     for i, (value, tensor,gpt,name) in enumerate(sorted_list):
         print(f"Tensor {name} at rank {i}: {tensor.numpy()}, {gpt.numpy()}, Value: {value}")
+
     for i, (value, tensor,gpt,name) in enumerate(sorted_list.elements):
         print(f"Tensor {name} at rank {i}: {tensor.numpy()}, {gpt.numpy()}, Value: {value}")
     print(f"Reverse")

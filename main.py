@@ -43,47 +43,45 @@ if __name__ == '__main__':
     print("Done Loading AIs: Start")
 
     while True:
-    # Prompt the user for input
         user_input = input(
-            "if you want to transcribe a soundfile or all soundfiles within a folder, type a valid file/folerpath, otherwise push the ANY button. ")
-        # Check if the user provided a file path or pressed 's'
-        if os.path.exists(user_input):
-            file_path = user_input
+            """
+            if you want to transcribe a soundfile or all soundfiles within a folder, type a valid file/folerpath, \n
+            to display and select one or more input devices press 'i'. \n
+            Start listener push 'r'.  \n
+            close with c
+            """)
+        if os.path.exists(user_input.strip('"')):
+            file_path = user_input.strip('"')
             print(f"Transcribing the file at {file_path}...")
-            SpeechToText.transcribeFile(file_path,15)
+            SpeechToText.transcribeFile(file_path, 15)
             # Here you would add the transcription logic
             print("Transcription complete!")
-        else:
+        elif user_input.lower() == "i":
+            devices = sd.query_devices()
+            for i, device in enumerate(devices):
+                print(
+                    f"Device {i}: {device['name']} - Input Channels: {device['max_input_channels']}, Output Channels: {device['max_output_channels']}")
+                devices_input = input(
+                    "type the device numbers that should jointly record and transcribe (example: '0 3' without ' ) ")
+                try:
+                    # Split the input string by spaces and convert to a list of integers
+                    devicesN = [int(num) for num in devices_input.split()]
+                    SpeechToText.set_input_devices(devicesN)
+                    print("Selected:", devicesN)
+                    break
+                except ValueError:
+                    print("Invalid input. Please enter numbers separated by spaces.")
+        elif user_input.lower() == "r":
+            print("Key listener is active. Start/Pause transcription by pressing f4. Close program with ESC")
+
+            # Get the default input device
+
+            with keyboard.Listener(on_press=on_press) as listener:
+                listener.join()
+        elif user_input.lower() == "c":
+            print("shutting down")
             break
 
-    print("Interactive mode:")
-    user_input = input(
-        "to display and select one or more input devices press 'i'. To continue with default recording device push the ANY button.  ")
-    if user_input.lower() == "i":
-        devices = sd.query_devices()
-        for i, device in enumerate(devices):
-            print(
-                f"Device {i}: {device['name']} - Input Channels: {device['max_input_channels']}, Output Channels: {device['max_output_channels']}")
-
-        while True:
-            devices_input = input(
-                "type the device numbers that should jointly record and transcribe (example: '0 3' without ' ) ")
-            try:
-                # Split the input string by spaces and convert to a list of integers
-                devicesN = [int(num) for num in devices_input.split()]
-                SpeechToText.set_input_devices(devicesN)
-                print("Selected:", devicesN)
-                break
-            except ValueError:
-                print("Invalid input. Please enter numbers separated by spaces.")
-    else:
-        SpeechToText.set_input_devices()
-
-    print("Key listener is active. Start/Pause transcription by pressing f4. Close program with ESC")
 
 
-    # Get the default input device
 
-
-    with keyboard.Listener(on_press=on_press) as listener:
-        listener.join()
