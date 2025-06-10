@@ -4,6 +4,8 @@ import torch
 from pynput import keyboard
 import SpeechToText_OnKlickClass
 import sounddevice as sd
+import cProfile
+import pstats
 
 def on_press(key):
     global key_pressed
@@ -30,6 +32,7 @@ def on_press(key):
         # Handle special keys (like Shift, Ctrl, etc.)
         print(f'Special key pressed: {key}')
 
+
 if __name__ == '__main__':
     # Variable to track if the key is pressed
     key_pressed = False
@@ -38,7 +41,8 @@ if __name__ == '__main__':
     device2 = torch.device("cuda:1") if torch.cuda.is_available() else torch.device("cpu")
 
     print("Start")
-    SpeechToText = SpeechToText_OnKlickClass.SpeechToText(device1,  True)
+    Debug = False
+    SpeechToText = SpeechToText_OnKlickClass.SpeechToText(device1,  Debug)
 
     print("Done Loading AIs: Start")
 
@@ -53,7 +57,15 @@ if __name__ == '__main__':
         if os.path.exists(user_input.strip('"')):
             file_path = user_input.strip('"')
             print(f"Transcribing the file at {file_path}...")
-            SpeechToText.transcribeFile(file_path, 15)
+            if Debug:
+                with cProfile.Profile() as profile:
+                    SpeechToText.transcribeFile(file_path, 25)
+
+                results = pstats.Stats(profile)
+                results.sort_stats(pstats.SortKey.TIME)
+                results.print_stats()
+            else:
+                SpeechToText.transcribeFile(file_path, 25)
             # Here you would add the transcription logic
             print("Transcription complete!")
         elif user_input.lower() == "i":

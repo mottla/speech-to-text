@@ -6,8 +6,8 @@ import librosa
 import torch
 import sounddevice as sd
 import torch.nn.functional as F
-import time, os
-
+import time, os, sys
+from torch.nn.utils.rnn import pad_sequence
 import torchaudio
 from select import error
 from tensorflow.python.ops.numpy_ops.np_dtypes import float32
@@ -18,14 +18,15 @@ import numpy as np
 from EmbeddingList import SortedList
 from speechbrain.inference.speaker import EncoderClassifier
 from pyannote.audio import Pipeline
+torch.set_grad_enabled(False)
 
 class SpeechToText:
     def __init__(self,device,Debug = False):
         self.device = device
-        self.intervalTime=30
+        self.intervalTime=15
         # Load the Whisper model and processor
         #self.model_name = "openai/whisper-large-v3"
-        self.model_name = "openai/whisper-large-v3"
+        self.model_name = "openai/whisper-large-v3-turbo"
         # Create a queue to hold audio data
         # Start audio stream
         self.sample_rate = 16000  # Whisper works best with 16kHz
@@ -60,6 +61,9 @@ class SpeechToText:
         # Load the Whisper model and processor
         self.processor = AutoProcessor.from_pretrained(self.model_name,device = self.device , torch_dtype=self.torch_dtype, low_cpu_mem_usage=True)
         self.STT_model = AutoModelForSpeechSeq2Seq.from_pretrained(self.model_name, torch_dtype=self.torch_dtype, low_cpu_mem_usage=True)
+
+
+
         # Set the model to evaluation mode
         self.STT_model.eval()
         self.STT_model.to(self.device)
@@ -68,7 +72,12 @@ class SpeechToText:
             "pyannote/speaker-diarization-3.1"
         ).to(torch.device("cuda"))
 
-        self.classifier = EncoderClassifier.from_hparams(source="speechbrain/spkrec-ecapa-voxceleb")
+        #self.classifier = EncoderClassifier.from_hparams(source="speechbrain/spkrec-ecapa-voxceleb").to(torch.device("cuda"))
+        # 1) instantiate & push model to GPU
+        self.classifier = EncoderClassifier.from_hparams(
+            source="speechbrain/spkrec-ecapa-voxceleb",
+            run_opts={"device": "cuda"}
+        )
         print("done init")
 
     def setEmbeddingComputer(self, computeEmbedding):
@@ -83,6 +92,12 @@ class SpeechToText:
         if waveform.shape[0] > 1:
             waveform = waveform.mean(dim=0, keepdim=True)  # Average the two channels
 
+        def progress_bar(iteration, total, length=40):
+            percent = (iteration / total) * 100
+            filled_length = int(length * iteration // total)
+            bar = '█' * filled_length + '-' * (length - filled_length)
+            sys.stdout.write(f'\r|{bar}| {percent:.2f}% Complete')
+            sys.stdout.flush()
 
         with open(path, 'a', encoding='utf-8'):
             pass  # No initial writing, just create the file
@@ -103,21 +118,24 @@ class SpeechToText:
 
         self.stop_event.clear()
         self.audio_threadOut = threading.Thread(target=self.processAudioOut,args=(path,))
-        self.audio_threadOut.start()
-
         self.force_processing.set()
+
+        self.audio_threadOut.start()
         for i in range(0, len(waveform), BLOCKSIZE):
             self.output_arrays = [waveform[i:i + BLOCKSIZE].numpy()]
             while len(self.output_arrays[0]) != 0:
                 time.sleep(0.1)
+            progress_bar(i, len(waveform))
+        progress_bar(len(waveform), len(waveform))
+        print("set stop")
         self.stop_event.set()
         self.force_processing.clear()
         self.audio_threadOut.join()
 
 
 
-    def transcribeFile(self,file_path,intervalTime = 10,Debug=False,skippIfExists = True):
-        self.Debug = Debug
+    def transcribeFile(self,file_path,intervalTime = 15,skippIfExists = True):
+
         self.stop_event.clear()
         self.intervalTime = intervalTime
 
@@ -133,7 +151,8 @@ class SpeechToText:
                 sound_handlers[file_extension](file_path)
                 return True
             else:
-                print(f"{file_path} is not a recognized sound file.")
+                if self.Debug:
+                    print(f"{file_path} is not a recognized sound file.")
                 return False
 
         def handle_mp3(file_path):
@@ -158,14 +177,17 @@ class SpeechToText:
         def list_files_in_folder(folder_path):
             # Check if the provided path is a directory
             if os.path.isdir(folder_path):
-                print(f"Listing files in folder: {folder_path}")
+                if self.Debug:
+                    print(f"Listing files in folder: {folder_path}")
                 for item in os.listdir(folder_path):
                     item_path = os.path.join(folder_path, item)
                     list_files_in_folder(item_path)
             elif is_sound_file(folder_path):
-                print(f"{folder_path} is a sound file.")
+                if self.Debug:
+                    print(f"{folder_path} is a sound file.")
             else:
-                print(f"{folder_path} is neither a folder nor a recognized sound file.")
+                if self.Debug:
+                    print(f"{folder_path} is neither a folder nor a recognized sound file.")
 
         list_files_in_folder(file_path)
 
@@ -269,20 +291,186 @@ class SpeechToText:
         self.audio_threadOut = threading.Thread(target=self.processAudioOut,args=(self.file_path))
         self.audio_threadOut.start()
 
-    def processAudioOut(self,file_path):
+    def processAudioOut(self, file_path):
+        """
+        Read streaming audio chunks, accumulate fixed‐length intervals,
+        run speaker diarization, then batch ASR over every BATCH_SIZE intervals.
+        """
+        BATCH_SIZE = 64
+
+
+        ctr = 0
+        with open(file_path, 'a', encoding='utf-8') as file:
+            file.seek(0, 2)
+            starttime = datetime.now()
+            file.write(f"\n\n[Starting transcribing at {starttime}]\n")
+            lastSpeaker = ""
+            # these lists will accumulate BATCH_SIZE items before running ASR
+            batch_audio = []
+            batch_vad_lists = []
+            batch_timestamps = []  # (optional) if you care about global offsets
+            ts_pattern = re.compile(r"<\|(\d+\.\d+)\|>\s*(.*?)<\|(\d+\.\d+)\|>")
+
+            # helper to flush whatever is in batch_audio right now
+            def _flush_batch(lastSpeaker):
+
+                if not batch_audio:
+                    print("empty")
+                    return
+
+                # 1) Tokenize the entire batch at once
+                np_list = [t.cpu().numpy().squeeze() for t in batch_audio]
+                print([ len(x)/self.sample_rate for x in np_list ])
+
+
+                # 2) Generate & decode
+                with torch.no_grad():
+                    m = datetime.now()
+
+                    inputs = self.processor(
+                        np_list,
+                        sampling_rate=self.sample_rate,
+                        return_attention_mask=True,
+                        return_tensors="pt"
+                    ).to(self.device).to(self.torch_dtype)
+                    print("encode ",datetime.now()-m)
+                    m = datetime.now()
+
+                    gen_ids = self.STT_model.generate(**inputs, return_timestamps=True, language="english")
+                    print("transform: ", datetime.now()-m)
+                    m = datetime.now()
+
+                    transcripts = self.processor.batch_decode(
+                        gen_ids, skip_special_tokens=True, decode_with_timestamps=True
+                    )
+                    print("decode", datetime.now()-m)
+
+                m = datetime.now()
+                # 3) Align + write
+                for audioSegment, vadList, transcript in zip(batch_audio, batch_vad_lists, transcripts):
+                    sentencesFromTransformer = ts_pattern.findall(transcript)
+                    words = [[float(s), float(e), txt.strip()] for s, txt, e in sentencesFromTransformer]
+
+                    segments = find_most_similar_intervals(words, vadList)
+
+
+                    res2 = self.embeddingCollector2(audioSegment, segments)
+
+                    for s, e, text, speaker in res2:
+                        if speaker != lastSpeaker:
+                            file.write(f"[{speaker}]:\n")
+                            lastSpeaker = speaker
+                        file.write(text + "\n")
+                        if self.Debug:
+                            print(text + "\n")
+                print("Speaker Assignment + write to file: ", datetime.now() - m)
+
+
+                file.flush()
+                batch_audio.clear()
+                batch_vad_lists.clear()
+                return lastSpeaker
+
+            # initialize an empty GPU buffer for raw audio
+            buffer = torch.tensor([], device=self.device, dtype=torch.float32)
+
+            while not self.stop_event.is_set():
+                # --- 1) Fill buffer with next chunk ---
+                mean = self.compute_mixed_output()
+
+                bufferTime = self.intervalTime - ((len(buffer) + len(mean)) / self.sample_rate)
+                if bufferTime > 0 and not self.force_processing.is_set():
+                    time.sleep(bufferTime)
+                    continue
+
+                if len(buffer) + len(mean) >= self.intervalTime * self.sample_rate:
+                    # Get audio data from the queue
+                    audio_data = torch.cat((buffer, torch.from_numpy(mean).to(self.device)), dim=0).to(torch.float32)
+                    if len(audio_data) == 0:
+                        continue
+                    # print(audio_data.shape)
+                    self.output_arrays = [np.array([]) for _ in range(0, len(self.output_arrays))]
+
+                    # audio_data = torch.from_numpy(audio_data).float().to(self.device)
+                    # audio_data = self.classifier.audio_normalizer(audio_data, self.sample_rate)
+
+                    input_data = {
+                        "waveform": audio_data.unsqueeze(0),  # The audio tensor
+                        "sample_rate": self.sample_rate  # The sample rate
+                    }
+                    with torch.no_grad():
+                        vad = self.speakerDiarization(input_data)
+                    timeline = vad.get_timeline().support()
+                    vadList = []
+                    for turn, _, speaker in vad.itertracks(yield_label=True):
+                        start_time = turn.start
+                        end_time = turn.end
+                        vadList.append([start_time, end_time, speaker])
+
+                    last_frame_was_cut = False
+                    if len(timeline) != 0:
+                        last_frame_was_cut = timeline[-1].end * self.sample_rate >= len(
+                            audio_data) * 0.99
+                        # audio_data = audio_data[vad.get_timeline().support()[0].start : ] #todo remove pre all noise
+
+                    # non_silent_audio_frames, last_frame_was_cut = remove_all_silence(audio_data,self.sample_rate,35,0.2,self.Debug)
+                    # non_silent_audio_frames, last_frame_was_cut = remove_silence_pt(audio_data,self.sample_rate, threshold=0.0001, min_silence_length=0.4,debug=True)
+                    if len(timeline) == 0:
+                        print("silence..")
+                        continue
+                    # print(buffer.shape,np.concatenate(non_silent_audio_frames).shape)
+                    complete = torch.tensor([]).to(self.device)
+                    if last_frame_was_cut:
+                        # print("last frame was cut")
+                        if len(timeline) > 1:
+                            complete = audio_data[:int(self.sample_rate * timeline[-2].end)]
+                            buffer = audio_data[int(self.sample_rate * timeline[-2].end):]
+                        else:
+                            complete = audio_data
+                            if len(complete) < self.sample_rate * self.intervalTime * 2.:
+                                buffer = complete
+                                print("collecting more..")
+                                continue
+                            buffer = torch.tensor([]).to(self.device)
+                    else:
+                        complete = audio_data
+                        buffer = torch.tensor([]).to(self.device)
+
+                    # optional debug dump
+                    if self.Debug:
+                        torchaudio.save(f"Debug/segment{ctr}.wav",
+                                        complete.cpu().unsqueeze(0),
+                                        self.sample_rate)
+                        ctr = (ctr + 1) % 8
+
+                    # --- 4) Accumulate for batch ASR ---
+                    batch_audio.append(complete)  # a 1-D FloatTensor on GPU
+                    batch_vad_lists.append(vadList)
+
+                    # when we've got enough segments, flush the batch
+                    if len(batch_audio) >= BATCH_SIZE:
+                        lastSpeaker = _flush_batch(lastSpeaker)
+            # end of while → we've been asked to stop
+            # Flush any leftovers:
+            _flush_batch(lastSpeaker)
+            file.write(f"\n\n[Finished transcribing; Took {datetime.now()-starttime}]\n")
+
+
+    def processAudioOut2(self,file_path):
         ctr = 0
         with (open(file_path, 'r+', encoding='utf-8') as file):
             file.seek(0, 2)
             file.write(f"\n\n[Starting transcribing at {datetime.now()}]\n")
             lastSpeaker = ""
+            ts_pattern    = re.compile(r"<\|(\d+\.\d+)\|>\s*(.*?)<\|(\d+\.\d+)\|>")
             try:
                 buffer = torch.tensor([]).to(self.device)
                 while not self.stop_event.is_set():  # Check if the stop event is set
                     mean = self.compute_mixed_output()
 
-                    if self.intervalTime - ((len(buffer) + len(mean)) / self.sample_rate) > 0 and not self.force_processing.is_set():
-                        #print("sleep for ",self.intervalTime - ((len(buffer) + len(mean)) / self.sample_rate),len(buffer) , len(mean))
-                        time.sleep(self.intervalTime - ((len(buffer) + len(mean)) / self.sample_rate))
+                    bufferTime = self.intervalTime - ((len(buffer) + len(mean)) / self.sample_rate)
+                    if bufferTime > 0 and not self.force_processing.is_set():
+                        time.sleep(bufferTime)
 
                     if len(buffer) + len(mean) >= self.intervalTime * self.sample_rate or self.force_processing.is_set():
                         # Get audio data from the queue
@@ -299,26 +487,33 @@ class SpeechToText:
                             "waveform": audio_data.unsqueeze(0),  # The audio tensor
                             "sample_rate": self.sample_rate  # The sample rate
                         }
-                        vad = self.speakerDiarization(input_data)
+                        with torch.no_grad():
+                            vad = self.speakerDiarization(input_data)
+                        timeline = vad.get_timeline().support()
+                        vadList = []
+                        for turn, _, speaker in vad.itertracks(yield_label=True):
+                            start_time = turn.start
+                            end_time = turn.end
+                            vadList.append([start_time, end_time, speaker])
 
                         last_frame_was_cut = False
-                        if len(vad.get_timeline().support()) != 0:
-                            last_frame_was_cut = vad.get_timeline().support()[-1].end * self.sample_rate >= len(
+                        if len(timeline) != 0:
+                            last_frame_was_cut = timeline[-1].end * self.sample_rate >= len(
                                 audio_data) * 0.99
                             # audio_data = audio_data[vad.get_timeline().support()[0].start : ] #todo remove pre all noise
 
                         # non_silent_audio_frames, last_frame_was_cut = remove_all_silence(audio_data,self.sample_rate,35,0.2,self.Debug)
                         # non_silent_audio_frames, last_frame_was_cut = remove_silence_pt(audio_data,self.sample_rate, threshold=0.0001, min_silence_length=0.4,debug=True)
-                        if len(vad.get_timeline().support()) == 0:
+                        if len(timeline) == 0:
                             print("silence..")
                             continue
                         # print(buffer.shape,np.concatenate(non_silent_audio_frames).shape)
                         complete = torch.tensor([]).to(self.device)
                         if last_frame_was_cut:
                             #print("last frame was cut")
-                            if len(vad.get_timeline().support())>1:
-                                complete =  audio_data[:int(self.sample_rate * vad.get_timeline().support()[-2].end)]
-                                buffer = audio_data[int(self.sample_rate * vad.get_timeline().support()[-2].end):]
+                            if len(timeline)>1:
+                                complete =  audio_data[:int(self.sample_rate * timeline[-2].end)]
+                                buffer = audio_data[int(self.sample_rate * timeline[-2].end):]
                             else:
                                 complete = audio_data
                                 if len(complete) < self.sample_rate * self.intervalTime * 2.:
@@ -336,6 +531,9 @@ class SpeechToText:
                             ctr += 1
                             ctr = ctr % 8
 
+                        #From here start changing code significantly!
+                        #instead of running the processor on complete, store complete together with the speakerdiarization results vadList
+                        #once we have n=4 batches, continue in the below logic
                         encodedAudio = self.processor(
                             complete.cpu().numpy().squeeze(),
                             sampling_rate=self.sample_rate,
@@ -356,27 +554,19 @@ class SpeechToText:
                             # "no_speech_threshold": 0.6,
                             "return_timestamps": True,
                             # "task": "translate"
+                            "language": "english"
                         }
 
                         with torch.no_grad():
                             generated_ids = self.STT_model.generate(**encodedAudio, **gen_kwargs)
-
-                        transcription = self.processor.batch_decode(generated_ids, skip_special_tokens=True,
+                            transcription = self.processor.batch_decode(generated_ids, skip_special_tokens=True,
                                                                     decode_with_timestamps=True)[0]
-
-                        pattern = r"<\|(\d+\.\d+)\|>\s*(.*?)<\|(\d+\.\d+)\|>"
                         # Find all matches
-                        matches = re.findall(pattern, transcription)
+                        matches = ts_pattern.findall( transcription)
 
                         # Create tuples from matches
                         result = [[float(start), float(end), text.strip()] for start, text, end in matches]
                         # Split the audio based on diarization results
-                        vadList = []
-                        for turn, _, speaker in vad.itertracks(yield_label=True):
-                            start_time = turn.start
-                            end_time = turn.end
-                            vadList.append([start_time,end_time,speaker])
-
 
                         res = find_most_similar_intervals(result,vadList)
                         res2 = self.embeddingCollector2(complete, res)
@@ -385,7 +575,8 @@ class SpeechToText:
                                 file.write(f"[{speaker}]:")
                                 file.write(f"\n")
                                 lastSpeaker = speaker
-                            print(speaker,segment)
+                            if self.Debug:
+                                print(speaker,segment)
                             file.write(segment)
                             file.write(f"\n")
 
@@ -412,21 +603,41 @@ class SpeechToText:
 
         similarity_threshold = 0.3
         mateched = []
-        for start, end ,text in speech_intervalls:
-            startFrame = int(start * self.sample_rate)
-            endFrame = int(end * self.sample_rate)
 
-            try:
-                e2 = self.classifier.encode_batch(audio_input1D[startFrame:endFrame].unsqueeze(0))
-            except error as err:
-                print("err ", err)
-                return
+        # 1) Extract each segment and record its length in frames
+        segments = []
+        lengths = []
+        for start, end, _text in speech_intervalls:
+            sF = int(start * self.sample_rate)
+            eF = int(end * self.sample_rate)
+            seg = audio_input1D[sF:eF]  # -> (frame_length,)
+            segments.append(seg)
+            lengths.append(seg.size(0))  # absolute length in frames
+
+        # 2) Pad them to the same length, stack into (batch, max_time)
+        #    pad_sequence with batch_first=True => (batch, max_time)
+        signals = pad_sequence(segments, batch_first=True)
+
+        # 3) Convert lengths to relative in [0,1] for wav_lens
+        lengths = torch.tensor(lengths, dtype=torch.float)  # (batch,)
+        max_len = float(lengths.max())
+        wav_lens = lengths / max_len  # still (batch,)
+
+        # 4) Move both to the same device as the model
+        device = next(self.classifier.parameters()).device
+        signals = signals.to(device)
+        wav_lens = wav_lens.to(device)
+
+        # 5) One single call
+        embeddings = self.classifier.encode_batch(signals, wav_lens)
+
+        for [start, end ,text],e2 in zip(speech_intervalls,embeddings):
             matches = SortedList()
             foundWithHighConfidence = False
             for i, (mergNumber, se1, _, name) in enumerate(self.leanedEmbeddings):
                 # print(frameEmbedding.shape,embedding.shape)
                 # cosine_simGPU = F.cosine_similarity(e1, se1, dim=1).item()
-                cosine_simGPU2 = F.cosine_similarity(e2, se1, dim=2).item()
+                cosine_simGPU2 = F.cosine_similarity(e2, se1, dim=1).item()
                 matches.add(cosine_simGPU2, None, None, name)
                 if cosine_simGPU2 > similarity_threshold:
                     foundWithHighConfidence = True
@@ -438,7 +649,6 @@ class SpeechToText:
             else:
                 newName = self.leanedEmbeddings.add(1., e2,None )
                 mateched.append([start, end, text, newName])
-
         return  mateched
 
 
@@ -459,33 +669,29 @@ def calculate_overlap(interval1, interval2):
     """Calculate the overlap between two intervals."""
     start1, end1 = interval1
     start2, end2 = interval2
-    return max(0, min(end1, end2) - max(start1, start2))
+    return  min(end1, end2) - max(start1, start2)
 
-def calculate_proximity(interval1, interval2):
-    """Calculate the proximity between two intervals."""
+def calculate_sizRatio(interval1, interval2):
+    """Calculate the overlap between two intervals."""
     start1, end1 = interval1
     start2, end2 = interval2
-    if end1 < start2:  # interval1 ends before interval2 starts
-        return start2 - end1
-    elif end2 < start1:  # interval2 ends before interval1 starts
-        return start1 - end2
-    return 0  # intervals overlap
+    return  min(end1-start1, end2-start2) / max(end1-start1, end2-start2)
 
 def calculate_similarity(interval1, interval2):
     """Calculate a similarity score based on overlap and proximity."""
     overlap = calculate_overlap(interval1, interval2)
-    proximity = calculate_proximity(interval1, interval2)
+    sizRatio = calculate_sizRatio(interval1, interval2)
     # You can adjust the weights as needed
-    return overlap - proximity
+    return overlap * sizRatio
 
-def find_most_similar_intervals(list1, list2):
+def find_most_similar_intervals(timestampedSenteces, voiceActivityList):
     similar_intervals = []
 
-    for start,end ,text in list1:
+    for start,end ,text in timestampedSenteces:
         best_match = None
         best_score = float('-inf')
 
-        for start2,end2,speaker in list2:
+        for start2,end2,_ in voiceActivityList:
             score = calculate_similarity([start,end], [start2,end2])
 
             if score > best_score:
