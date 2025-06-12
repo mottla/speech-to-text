@@ -8,11 +8,9 @@ import sounddevice as sd
 import torch.nn.functional as F
 import time, os, sys
 
-from anyio import sleep
 from torch.nn.utils.rnn import pad_sequence
 import torchaudio
-from select import error
-from tensorflow.python.ops.numpy_ops.np_dtypes import float32
+
 from transformers import AutoProcessor, AutoModelForSpeechSeq2Seq
 from datetime import datetime, timedelta
 import numpy as np
@@ -21,15 +19,15 @@ from EmbeddingList import SortedList
 from speechbrain.inference.speaker import EncoderClassifier
 from pyannote.audio import Pipeline
 torch.set_grad_enabled(False)
-import nemo.collections.asr as nemo_asr
-#asr_model = nemo_asr.models.ASRModel.from_pretrained("nvidia/parakeet-tdt-0.6b-v2")
+
 class SpeechToText:
-    def __init__(self,device,Debug = False,intervalTime=30):
+    def __init__(self,device,Debug = False,BATCH_SIZE = 64 ,model_name = "openai/whisper-large-v3-turbo" ):
         self.device = device
-        self.intervalTime=intervalTime
+        self.intervalTime=15
+        self.BATCH_SIZE = BATCH_SIZE
         # Load the Whisper model and processor
         #self.model_name = "nvidia/parakeet-tdt-0.6b-v2"
-        self.model_name = "openai/whisper-large-v3-turbo"
+        self.model_name = model_name
         # Create a queue to hold audio data
         # Start audio stream
         self.sample_rate = 16000  # Whisper works best with 16kHz
@@ -88,7 +86,7 @@ class SpeechToText:
         self.GPTembeddingComputer = computeEmbedding
         return
 
-    def transcribeFile(self,file_path,skippIfExists = True):
+    def transcribeFile(self,file_path,skippIfExists = True,transcribeTimestamps = True):
 
         self.stop_event.clear()
 
@@ -137,21 +135,25 @@ class SpeechToText:
                 lastSpeaker=""
 
                 length = 0
+                wavLength = len(waveform.squeeze())
                 for audioBlock, vadBlock in zip(batched_audio, batched_vadList):
                     transcripts, vadBlock = self._flush(audioBlock, vadBlock,  True)
 
                     for a in audioBlock:
                         length += len(a)
 
-                    progress_bar(length, len(waveform.squeeze()))
+                    progress_bar(length, wavLength)
                     for text, [s, e, speaker] in zip(transcripts, vadBlock):
                         if speaker != lastSpeaker:
-                            file.write(f"[{speaker} at {seconds_to_hms_24h(s)}]:\n")
+                            if transcribeTimestamps:
+                                file.write(f"[{speaker} at {seconds_to_hms_24h(s)}]:\n")
+                            else:
+                                file.write(f"[{speaker}]:\n")
                             lastSpeaker = speaker
                         file.write(text + "\n")
                         # if self.Debug:
                         #print(text + "\n")
-                progress_bar(len(waveform.squeeze()), len(waveform.squeeze()))
+                progress_bar(wavLength, wavLength)
                 file.write(f"\n[Finished transcribing; Took {datetime.now() - starttime}]")
                 file.flush()
 
@@ -183,7 +185,7 @@ class SpeechToText:
             waveform = resampler(waveform)
 
         waveform = waveform.to(self.device)
-        BATCH_SIZE = 64
+
 
         ctr = 0
 
@@ -218,8 +220,8 @@ class SpeechToText:
                 ctr = (ctr + 1) % 8
             audio_batches.append(complete )
 
-        batched_audio = [audio_batches[i:i + BATCH_SIZE] for i in range(0, len(audio_batches), BATCH_SIZE)]
-        batched_vadList = [vadList[i:i + BATCH_SIZE] for i in range(0, len(vadList), BATCH_SIZE)]
+        batched_audio = [audio_batches[i:i + self.BATCH_SIZE] for i in range(0, len(audio_batches), self.BATCH_SIZE)]
+        batched_vadList = [vadList[i:i + self.BATCH_SIZE] for i in range(0, len(vadList), self.BATCH_SIZE)]
         clearGPU()
         return batched_audio,batched_vadList
 

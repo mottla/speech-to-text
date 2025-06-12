@@ -2,16 +2,20 @@
 
 ## Overview
 
-This project implements a speech-to-text (STT) system using the Whisper v3 large model. The entire process is executed locally, ensuring that all audio data and transcriptions remain private and secure. The system learns to identify speaker voices over time and annotates the transcript accordingly, enhancing the clarity and context of the transcriptions.
+This project integrates state-of-the-art speech-to-text (STT) models with speaker diarization algorithms to address the common issue of audio segmentation. Traditional transcription methods often divide audio into fixed-size blocks, which can lead to cutting off speakers mid-sentence and introducing errors in the STT output.
+
+To enhance speaker identification, the project also implements speaker embedding extraction techniques, allowing for consistent recognition and differentiation of speakers across multiple sessions and use cases.
+
+All processes are executed locally, ensuring that audio data and transcriptions remain private and secure.
 
 Transcription can occur in two ways:
-- **Just-in-Time (Streaming)**: Transcription can happen in real-time via a stream.
-- **Static**: Transcription can also be performed from local WAV files.
+- **Just-in-Time (Streaming)**: Transcription can happen in real-time. Select one or more devices to transcribe for example an online meeting and your microphone input together. 
+- **Static**: Transcription can also be performed from local audio files. (currently supported: WAV,MP3)
 
 ## Features
 
 - **Local Execution**: All processing is done locally to maintain privacy and security.
-- **Adaptive Learning**: The system learns to identify speaker voices and annotates the transcript respectively, improving transcription accuracy and context.
+- **Adaptive Learning**: (Optionally) The system learns to identify speaker voices, adds timestamps and annotates the transcript respectively, improving transcription accuracy and context.
 - **Model Flexibility**: The Whisper v3 model can be replaced with any other text-to-speech (TTS) model that adheres to the Hugging Face interface.
 - **Translation Support**: Whisper v3 supports real-time translation, allowing for multilingual transcription.
 - **Transcribe Zoom, Teams or whatever meetings**: Supports multiple inputs, so it can record all your audio output together with you microphone input using an appropriate setup (see below)
@@ -19,7 +23,7 @@ Transcription can occur in two ways:
 
 ## Requirements
 
-- **VRAM**: Approximately 7 GB of VRAM when using - [OpenAI Whisper](https://huggingface.co/openai/whisper-large-v3is) as the speech-to-text model. This model can transcribe a wide range of languages and also perform translation. Model can easily be changed. 
+- **VRAM**: Approximately 7 GB of VRAM when using - [OpenAI Whisper](https://huggingface.co/openai/whisper-large-v3is) as the speech-to-text model.  Model can easily be changed which can significantly influence performance. 
 - **CUDA**: Ensure that CUDA is installed and configured for GPU acceleration.
 - **(optional) Virtual Audio Cable**: Setup [vb-audio](https://vb-audio.com/Cable/) in order to record your voice together with your speakers output, if you want to get a transcript/translation of your Zoom meeting.
 
@@ -83,8 +87,9 @@ To run the speech-to-text system, execute the following command and then follow 
 ```bash
 python main.py
 ```
+- **Just-in-Time Transcription **: The program will create a folder inside the project called Transcripts, where it stores all transcribed audio.
+- **Static**: Select a folder, the program will recurse over all .mp3 and .wav files and create a .txt transcription file for each. Enable speaker embedding processor to consistently identify speakers across the files.
 
-The program will create a folder inside the project called Transcripts, where it stores all transcribed audio.
 
 ## Contributing
 
