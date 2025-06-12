@@ -78,7 +78,6 @@ class SortedList:
             # Load the sorted list from a file
             self.elements = torch.load(self.file_path)
             for (a,c,b,name) in self.elements:
-                print(name,a,b,c)
                 if name not in COLORS:
                     print(name)
                 else:

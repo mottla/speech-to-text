@@ -23,7 +23,7 @@ def on_press(key):
                 if not key_pressed:
                     key_pressed = True
                     print("Start transcribing...")
-                    SpeechToText.start_recording_multiple(10)
+                    SpeechToText.start_recording_multiple(intervalTime=15)
                 else:
                     print("Stop transcribing ...")
                     key_pressed = False
@@ -59,30 +59,32 @@ if __name__ == '__main__':
             print(f"Transcribing the file at {file_path}...")
             if Debug:
                 with cProfile.Profile() as profile:
-                    SpeechToText.transcribeFile(file_path, 25)
+                    SpeechToText.transcribeFile(file_path)
 
                 results = pstats.Stats(profile)
                 results.sort_stats(pstats.SortKey.TIME)
                 results.print_stats()
             else:
-                SpeechToText.transcribeFile(file_path, 25)
+                SpeechToText.transcribeFile(file_path)
             # Here you would add the transcription logic
             print("Transcription complete!")
         elif user_input.lower() == "i":
             devices = sd.query_devices()
+            print("current default input device: ",sd.default.device[0])
+            print("Available Microphones:")
             for i, device in enumerate(devices):
-                print(
-                    f"Device {i}: {device['name']} - Input Channels: {device['max_input_channels']}, Output Channels: {device['max_output_channels']}")
-                devices_input = input(
-                    "type the device numbers that should jointly record and transcribe (example: '0 3' without ' ) ")
-                try:
-                    # Split the input string by spaces and convert to a list of integers
-                    devicesN = [int(num) for num in devices_input.split()]
-                    SpeechToText.set_input_devices(devicesN)
-                    print("Selected:", devicesN)
-                    break
-                except ValueError:
-                    print("Invalid input. Please enter numbers separated by spaces.")
+                if device['max_input_channels'] > 0:
+                    print(
+                        f"Device {i}: {device['name']} - Input Channels: {device['max_input_channels']}, Output Channels: {device['max_output_channels']}")
+            devices_input = input(
+                "type the device numbers that should jointly record and transcribe (example: '0 3' without ' ) ")
+            try:
+                # Split the input string by spaces and convert to a list of integers
+                devicesN = [int(num) for num in devices_input.split()]
+                SpeechToText.set_input_devices(devicesN)
+                print("Selected:", devicesN)
+            except ValueError:
+                print("Invalid input. Please enter numbers separated by spaces.")
         elif user_input.lower() == "r":
             print("Key listener is active. Start/Pause transcription by pressing f4. Close program with ESC")
 
